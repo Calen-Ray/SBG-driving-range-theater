@@ -1,0 +1,16 @@
+<Project>
+  <!--
+    Copy this file to Developer.props (which is .gitignored) and tweak to match your machine.
+    Any property set here takes precedence over defaults in Directory.Build.props.
+  -->
+  <PropertyGroup>
+    <!-- Override if Super Battle Golf isn't at the default Steam install path -->
+    <!-- <GameInstallDir>D:\Games\SteamLibrary\steamapps\common\Super Battle Golf</GameInstallDir> -->
+
+    <!-- Override if your r2modman profile isn't called "Default" -->
+    <!-- <R2ProfileDir>$(APPDATA)\r2modmanPlus-local\SuperBattleGolf\profiles\Dev</R2ProfileDir> -->
+
+    <!-- Set to "true" to skip the auto-copy into r2modman after each build -->
+    <!-- <SkipDeploy>true</SkipDeploy> -->
+  </PropertyGroup>
+</Project>

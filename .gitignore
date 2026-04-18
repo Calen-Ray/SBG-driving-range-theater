@@ -1,0 +1,27 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.pidb
+*.userprefs
+.vs/
+
+# IDE
+.idea/
+.vscode/
+
+# Build / packaging output
+artifacts/
+dist/
+*.zip
+
+# Developer-local overrides (paths, etc.) — each dev makes their own
+Developer.props
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Misc
+*.log

@@ -29,8 +29,38 @@ state is server-authoritative and replicated via Mirror.
 Drop video files into the `Videos/` folder of **any** plugin package. The framework scans
 `<r2modman profile>/BepInEx/plugins/*/Videos/` at startup and sorts the files alphabetically.
 
-Recommended format: **MP4 (H.264)** — most widely compatible with Unity's VideoPlayer. Also
-accepted: `.webm`, `.mov`, `.ogv`, `.mkv`, `.m4v` (compatibility varies by platform).
+### Video
+
+Recommended format: **MP4 (H.264 8-bit / yuv420p)** — widest compatibility with Unity's
+VideoPlayer backend (Media Foundation on Windows). Also accepted by extension: `.webm`, `.mov`,
+`.ogv`, `.mkv`, `.m4v` — but decode support varies, and H.264 **10-bit** (profile `High 10`,
+`yuv420p10le`) will fail with `VideoPlayer cannot play url`.
+
+Transcode problematic files with:
+
+```
+ffmpeg -y -i input.mp4 -c:v libx264 -profile:v high -pix_fmt yuv420p -crf 22 -preset veryfast \
+       -c:a copy output.mp4
+```
+
+### Audio
+
+Super Battle Golf has Unity's native audio disabled project-wide, so the `VideoPlayer`'s built-in
+audio paths are silent. The framework plays audio from a **sidecar file** next to each video,
+through FMOD.
+
+Ship an audio file alongside every video with the same basename — `1 Gwimbly.mp4` →
+`1 Gwimbly.ogg`. Accepted extensions (first match wins): `.ogg`, `.wav`, `.mp3`, `.m4a`, `.aac`,
+`.flac`. If no sidecar is found, the video still plays, silently.
+
+Extract `.ogg` audio from an existing mp4 with:
+
+```
+ffmpeg -y -i input.mp4 -vn -c:a libvorbis -q:a 4 input.ogg
+```
+
+Audio sync is maintained by a 2-second drift check against `VideoPlayer.time`; the framework
+corrects mismatches > 250 ms with `channel.setPosition()`.
 
 Prefix filenames with `01-`, `02-`, … to control playback order.
 

@@ -1,0 +1,9 @@
+{
+    "name": "DrivingRangeTheater",
+    "version_number": "0.1.0",
+    "website_url": "https://github.com/Calen-Ray/SBG-driving-range-theater",
+    "description": "Turns the driving-range leaderboard TV into a video player. Content mods drop video files into a Videos folder and next/back buttons cycle between them.",
+    "dependencies": [
+        "BepInEx-BepInExPack-5.4.2305"
+    ]
+}
