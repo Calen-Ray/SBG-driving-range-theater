@@ -17,6 +17,7 @@ namespace DrivingRangeTheater
 
         internal static ManualLogSource Log;
         internal static ConfigEntry<float> VolumeConfig;
+        internal static ConfigEntry<float> OverscanCompensationConfig;
 
         // Simple rate limit: one cycle per 200 ms. Vanilla uses cycleButtonCooldown (~0.3 s) —
         // we match the spirit without needing to mirror the exact value.
@@ -30,8 +31,16 @@ namespace DrivingRangeTheater
                 new ConfigDescription(
                     "Client-local master volume for the driving-range theater (0.0 - 1.0).",
                     new AcceptableValueRange<float>(0f, 1f)));
+            OverscanCompensationConfig = Config.Bind("Theater", "OverscanCompensation", 0.00f,
+                new ConfigDescription(
+                    "Shrinks the displayed video inside the theater screen RT to compensate for screen overscan/cropping (0.0 - 0.25).",
+                    new AcceptableValueRange<float>(0f, 0.25f)));
             VolumeConfig.SettingChanged += (_, __) =>
                 TheaterController.Current?.SetVolume(VolumeConfig.Value);
+            OverscanCompensationConfig.SettingChanged += (_, __) =>
+                TheaterController.Current?.RefreshDisplayComposition();
+            PauseMenu.Paused += VolumeSliderUi.HandlePauseShown;
+            PauseMenu.Unpaused += VolumeSliderUi.HandlePauseHidden;
 
             VideoLibrary.ScanAll(Paths.PluginPath, Log);
 
@@ -92,8 +101,6 @@ namespace DrivingRangeTheater
         {
             private static bool Prefix(DrivingRangeStaticCameraManager __instance)
             {
-                if (VideoLibrary.Videos.Count == 0) return true; // no videos => vanilla behavior
-
                 var screenRenderer = Traverse.Create(__instance).Field<Renderer>("screenRenderer").Value;
                 if (screenRenderer == null) return true;
 
@@ -102,6 +109,12 @@ namespace DrivingRangeTheater
                 {
                     var controller = screenRenderer.gameObject.AddComponent<TheaterController>();
                     controller.Initialize(screenRenderer, __instance);
+                }
+
+                if (VideoLibrary.Videos.Count == 0)
+                {
+                    TheaterController.Current.ShowNoVideos();
+                    return false;
                 }
 
                 TheaterController.Current.ApplyIndex(__instance.NetworkcurrentCameraIndex);

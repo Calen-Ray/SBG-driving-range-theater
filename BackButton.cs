@@ -15,9 +15,7 @@ namespace DrivingRangeTheater
         // both, which feels consistent to the player.
         public bool IsInteractionEnabled => DrivingRangeStaticCameraManager.IsCycleNextButtonEnabled;
 
-        // Reuse the "Next" localized prompt — there isn't a vanilla "Previous" string and shipping
-        // a custom LocalizedString needs asset-bundle glue. Players recognize the button by position.
-        public LocalizedString InteractString => Localization.UI.SPECTATOR_Prompt_Next_Ref;
+        public LocalizedString InteractString => Localization.UI.SPECTATOR_Prompt_Previous_Ref;
 
         public void LocalPlayerInteract()
         {
@@ -36,7 +34,7 @@ namespace DrivingRangeTheater
     // ApplyCurrentCameraIndex calls don't re-clone.
     internal static class BackButtonInstaller
     {
-        private const float OffsetMeters = -0.6f; // nudge left of the original along its right-axis
+        private const float OffsetMeters = -0.6508f; // original offset plus ~2 inches further left
         private static bool _installed;
 
         public static void ResetForNewScene() => _installed = false;
@@ -66,14 +64,27 @@ namespace DrivingRangeTheater
 
             var clone = Object.Instantiate(nextButton.gameObject, nextButton.transform.parent);
             clone.name = "SBG-BackCameraButton";
-            clone.transform.localPosition = nextButton.transform.localPosition +
-                                            nextButton.transform.right * OffsetMeters;
+            var localOffset = Vector3.right * OffsetMeters;
+            var worldOffset = nextButton.transform.TransformVector(localOffset);
+            clone.transform.localPosition = nextButton.transform.localPosition + localOffset;
             clone.transform.localRotation = nextButton.transform.localRotation;
             clone.transform.localScale    = nextButton.transform.localScale;
 
             var vanilla = clone.GetComponent<DrivingRangeNextCameraButton>();
             if (vanilla != null) Object.Destroy(vanilla);
             clone.AddComponent<DrivingRangeBackCameraButton>();
+
+            // The cloned mesh lands in the correct spot visually, but the interact reticle anchor
+            // can stay near the original button. Move it explicitly so hover/use lines up with the
+            // physical button location.
+            var nextEntity = nextButton.GetComponent<Entity>();
+            var cloneEntity = clone.GetComponent<Entity>();
+            if (nextEntity != null && cloneEntity != null &&
+                nextEntity.TargetReticlePosition != null && cloneEntity.TargetReticlePosition != null)
+            {
+                cloneEntity.TargetReticlePosition.transform.position =
+                    nextEntity.TargetReticlePosition.transform.position + worldOffset;
+            }
 
             _installed = true;
             Plugin.Log?.LogInfo($"Back button installed at {clone.transform.position}.");

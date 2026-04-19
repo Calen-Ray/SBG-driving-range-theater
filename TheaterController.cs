@@ -1,6 +1,7 @@
 using System.IO;
 using FMOD;
 using FMODUnity;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Video;
 
@@ -20,8 +21,17 @@ namespace DrivingRangeTheater
     {
         public static TheaterController Current;
 
+        private struct ScreenTextureBinding
+        {
+            public string Name;
+            public Texture Texture;
+            public Vector2 Scale;
+            public Vector2 Offset;
+        }
+
         private sealed class Slot
         {
+            public string Label;
             public VideoPlayer Player;
             public RenderTexture RenderTexture;
             public int VideoIndex = -1;  // which entry this slot is currently bound to
@@ -32,6 +42,9 @@ namespace DrivingRangeTheater
         private int _activeSlot;
         private Renderer _screenRenderer;
         private Material _screenMaterial;
+        private ScreenTextureBinding[] _screenBindings = System.Array.Empty<ScreenTextureBinding>();
+        private RenderTexture _screenRenderTexture;
+        private TextMeshPro _statusText;
 
         // FMOD audio — one loaded Sound per video entry, created lazily on first prepare.
         // The active Channel is replaced each cycle.
@@ -41,6 +54,10 @@ namespace DrivingRangeTheater
         private float _driftCheckTimer;
         private const float DriftCheckInterval = 2.0f;   // seconds
         private const int DriftToleranceMs = 250;
+        private Vector3 _lastAudioWorldPos;
+        private const float AudioMinDistance = 6f;
+        private const float AudioMaxDistance = 32f;
+        private int _activeAudioIndex = -1;
 
         public void Initialize(Renderer screenRenderer, DrivingRangeStaticCameraManager vanillaMgr)
         {
@@ -48,10 +65,8 @@ namespace DrivingRangeTheater
             _screenRenderer = screenRenderer;
             _screenMaterial = screenRenderer.material;
 
-            // Grab the dimensions the screen mesh was tuned to from a vanilla camera's target
-            // texture. Using a mismatched RT size causes visible top/bottom (or side) crop
-            // because the UV mapping on the TV bezel is baked to these exact dimensions.
-            int rtW = 1920, rtH = 1080;
+            // Grab the vanilla screen RT so we can composite into the exact texture the in-scene
+            // display already samples. Decode itself still happens into our own 16:9 RTs.
             try
             {
                 var camerasField = HarmonyLib.Traverse.Create(vanillaMgr).Field("cameras");
@@ -62,9 +77,8 @@ namespace DrivingRangeTheater
                     var cam = camTrav.GetValue() as Camera;
                     if (cam != null && cam.targetTexture != null)
                     {
-                        rtW = cam.targetTexture.width;
-                        rtH = cam.targetTexture.height;
-                        Plugin.Log?.LogInfo($"Theater RT sized from vanilla camera: {rtW}x{rtH}");
+                        _screenRenderTexture = cam.targetTexture;
+                        Plugin.Log?.LogInfo($"Theater RT sized from vanilla camera: {_screenRenderTexture.width}x{_screenRenderTexture.height} ({_screenRenderTexture.name})");
                     }
                 }
             }
@@ -74,20 +88,47 @@ namespace DrivingRangeTheater
             // moves one step at a time.
             _slots = new Slot[3];
             for (int i = 0; i < _slots.Length; i++)
-                _slots[i] = CreateSlot("SBG-TheaterSlot-" + i, rtW, rtH);
+                _slots[i] = CreateSlot("SBG-TheaterSlot-" + i, 1920, 1080);
 
-            // Identify the shader texture slot to bind on each cycle.
+            // Identify the screen's color texture slot(s) to bind on each cycle. Swapping every
+            // texture property is too blunt — masks / normals should stay as-authored.
             var shader = _screenMaterial.shader;
             int propCount = shader.GetPropertyCount();
             var swapped = new System.Collections.Generic.List<string>();
             for (int i = 0; i < propCount; i++)
             {
-                if (shader.GetPropertyType(i) == UnityEngine.Rendering.ShaderPropertyType.Texture)
-                {
-                    swapped.Add(shader.GetPropertyName(i));
-                }
+                if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Texture)
+                    continue;
+
+                string prop = shader.GetPropertyName(i);
+                string lower = prop.ToLowerInvariant();
+                if (lower.Contains("maintex") || lower.Contains("basemap") || lower.Contains("emission"))
+                    swapped.Add(prop);
+            }
+            if (swapped.Count == 0)
+            {
+                if (_screenMaterial.HasProperty("_MainTex")) swapped.Add("_MainTex");
+                if (_screenMaterial.HasProperty("_BaseMap")) swapped.Add("_BaseMap");
+                if (_screenMaterial.HasProperty("_EmissionMap")) swapped.Add("_EmissionMap");
             }
             _screenTextureSlots = swapped.ToArray();
+            _screenBindings = new ScreenTextureBinding[_screenTextureSlots.Length];
+            for (int i = 0; i < _screenTextureSlots.Length; i++)
+            {
+                string slot = _screenTextureSlots[i];
+                _screenBindings[i] = new ScreenTextureBinding
+                {
+                    Name = slot,
+                    Texture = _screenMaterial.GetTexture(slot),
+                    Scale = _screenMaterial.GetTextureScale(slot),
+                    Offset = _screenMaterial.GetTextureOffset(slot),
+                };
+
+                // Neutralize any overscan-ish texture transform so the full video frame lands on
+                // the visible UV island instead of inheriting the camera feed's crop.
+                _screenMaterial.SetTextureScale(slot, Vector2.one);
+                _screenMaterial.SetTextureOffset(slot, Vector2.zero);
+            }
             if (_screenMaterial.HasProperty("_EmissionColor"))
                 _screenMaterial.SetColor("_EmissionColor", Color.white * 1.2f);
             _screenMaterial.EnableKeyword("_EMISSION");
@@ -139,6 +180,7 @@ namespace DrivingRangeTheater
             }
             catch (System.Exception ex) { Plugin.Log?.LogWarning($"UV probe failed: {ex.Message}"); }
 
+            CreateStatusText();
             _sounds = new FMOD.Sound[VideoLibrary.Entries.Count];
         }
 
@@ -172,14 +214,18 @@ namespace DrivingRangeTheater
             // aspect, the stretch is imperceptible. If the mesh is a very different aspect (e.g.
             // square), switch to FitInside for letterboxing instead of distortion.
             vp.aspectRatio = VideoAspectRatio.Stretch;
+            var slot = new Slot
+            {
+                Label = label,
+                Player = vp,
+                RenderTexture = rt
+            };
             vp.errorReceived += (VideoPlayer v, string msg) =>
                 Plugin.Log?.LogError($"[{label}] {msg}");
-            vp.prepareCompleted += (VideoPlayer v) =>
-                Plugin.Log?.LogInfo($"[{label}] prepared: {Path.GetFileName(v.url)} ({v.width}x{v.height}, {v.frameRate:F1}fps)");
-            vp.started += (VideoPlayer v) =>
-                Plugin.Log?.LogInfo($"[{label}] started: {Path.GetFileName(v.url)}");
+            vp.prepareCompleted += (VideoPlayer v) => HandleSlotPrepared(slot);
+            vp.started += (VideoPlayer v) => HandleSlotStarted(slot);
 
-            return new Slot { Player = vp, RenderTexture = rt };
+            return slot;
         }
 
         // Apply the canonical "which video is showing" index. Plays it on the center slot and
@@ -188,6 +234,7 @@ namespace DrivingRangeTheater
         {
             if (VideoLibrary.Entries.Count == 0) return;
             index = Wrap(index, VideoLibrary.Entries.Count);
+            StopActiveChannel();
 
             // If any slot is already bound to this index, make it active. Otherwise commandeer
             // the current center slot for the new video and leave the others to Prepare around it.
@@ -199,8 +246,7 @@ namespace DrivingRangeTheater
             }
             _activeSlot = slotWithIndex;
 
-            // Show this slot's RT on the screen.
-            BindScreenTo(_slots[_activeSlot].RenderTexture);
+            AssignRenderTargets(_activeSlot);
 
             // Play it. If already prepared (preloaded), playback starts quickly; otherwise Prepare
             // fires off async decode and Play picks up when it's ready.
@@ -209,14 +255,38 @@ namespace DrivingRangeTheater
             {
                 BindSlotToVideo(slot, index);
             }
+            ShowStatus("Loading...");
             slot.Player.Prepare();
             slot.Player.Play();
             Plugin.Log?.LogInfo($"Theater playing [{index}] {Path.GetFileName(VideoLibrary.Entries[index].VideoPath)} (slot {_activeSlot})");
 
-            StartAudioFor(index);
-
             // Preload neighbors.
             PreloadNeighbors(index);
+        }
+
+        private void HandleSlotPrepared(Slot slot)
+        {
+            slot.Prepared = true;
+            Plugin.Log?.LogInfo($"[{slot.Label}] prepared: {Path.GetFileName(slot.Player.url)} ({slot.Player.width}x{slot.Player.height}x{slot.Player.frameRate:F1}fps)");
+
+            if (_slots != null && _slots[_activeSlot] == slot)
+            {
+                AssignRenderTargets(_activeSlot);
+                CompositeToScreen(slot.RenderTexture);
+            }
+        }
+
+        private void HandleSlotStarted(Slot slot)
+        {
+            Plugin.Log?.LogInfo($"[{slot.Label}] started: {Path.GetFileName(slot.Player.url)}");
+            if (_slots == null || _slots[_activeSlot] != slot)
+                return;
+
+            AssignRenderTargets(_activeSlot);
+            CompositeToScreen(slot.RenderTexture);
+            HideStatus();
+            if (slot.VideoIndex >= 0 && slot.VideoIndex != _activeAudioIndex)
+                StartAudioFor(slot.VideoIndex);
         }
 
         private void PreloadNeighbors(int centerIndex)
@@ -262,14 +332,60 @@ namespace DrivingRangeTheater
             _screenMaterial.mainTexture = rt;
         }
 
+        private void AssignRenderTargets(int activeSlot)
+        {
+            for (int i = 0; i < _slots.Length; i++)
+                if (_slots[i].Player.targetTexture != _slots[i].RenderTexture)
+                    _slots[i].Player.targetTexture = _slots[i].RenderTexture;
+
+            // Fallback for cases where the screen is not actually sampling the vanilla RT.
+            if (_screenRenderTexture == null)
+                BindScreenTo(_slots[activeSlot].RenderTexture);
+            else
+                BindScreenTo(_screenRenderTexture);
+        }
+
+        private void CompositeToScreen(RenderTexture source)
+        {
+            if (_screenRenderTexture == null || source == null) return;
+
+            float overscan = Plugin.OverscanCompensationConfig != null
+                ? Mathf.Clamp01(Plugin.OverscanCompensationConfig.Value)
+                : 0.12f;
+
+            float targetW = _screenRenderTexture.width;
+            float targetH = _screenRenderTexture.height;
+            float safeW = targetW * (1f - overscan * 2f);
+            float safeH = targetH * (1f - overscan * 2f);
+            float sourceAspect = source.height > 0 ? (float)source.width / source.height : 16f / 9f;
+            float safeAspect = safeH > 0f ? safeW / safeH : sourceAspect;
+
+            float drawW = safeW;
+            float drawH = safeH;
+            if (safeAspect > sourceAspect)
+                drawW = drawH * sourceAspect;
+            else
+                drawH = drawW / sourceAspect;
+
+            float drawX = (targetW - drawW) * 0.5f;
+            float drawY = (targetH - drawH) * 0.5f;
+
+            var prev = RenderTexture.active;
+            RenderTexture.active = _screenRenderTexture;
+            GL.PushMatrix();
+            GL.LoadPixelMatrix(0f, targetW, targetH, 0f);
+            GL.Clear(true, true, Color.black);
+            Graphics.DrawTexture(new Rect(drawX, drawY, drawW, drawH), source);
+            GL.PopMatrix();
+            RenderTexture.active = prev;
+        }
+
         private string BuildUrl(int index) => VideoLibrary.Entries[index].VideoPath;
 
         // ---- audio ----
 
         private void StartAudioFor(int index)
         {
-            StopActiveChannel();
-
             var entry = VideoLibrary.Entries[index];
             if (string.IsNullOrEmpty(entry.AudioPath)) return;
 
@@ -277,7 +393,8 @@ namespace DrivingRangeTheater
             if (_sounds[index].handle == System.IntPtr.Zero)
             {
                 var r = RuntimeManager.CoreSystem.createSound(entry.AudioPath,
-                    FMOD.MODE.CREATESTREAM | FMOD.MODE.LOOP_NORMAL, out _sounds[index]);
+                    FMOD.MODE.CREATESTREAM | FMOD.MODE.LOOP_NORMAL | FMOD.MODE._3D | FMOD.MODE._3D_LINEARROLLOFF,
+                    out _sounds[index]);
                 if (r != FMOD.RESULT.OK)
                 {
                     Plugin.Log?.LogError($"FMOD createSound failed for {entry.AudioPath}: {r}");
@@ -286,16 +403,19 @@ namespace DrivingRangeTheater
             }
 
             var sys = RuntimeManager.CoreSystem;
-            sys.getMasterChannelGroup(out FMOD.ChannelGroup group);
-            var res = sys.playSound(_sounds[index], group, false, out _activeChannel);
+            var res = sys.playSound(_sounds[index], default(FMOD.ChannelGroup), false, out _activeChannel);
             if (res != FMOD.RESULT.OK)
             {
                 Plugin.Log?.LogError($"FMOD playSound failed: {res}");
                 return;
             }
+            _activeChannel.setMode(FMOD.MODE._3D | FMOD.MODE._3D_LINEARROLLOFF);
+            _activeChannel.set3DMinMaxDistance(AudioMinDistance, AudioMaxDistance);
             _activeChannel.setVolume(Plugin.VolumeConfig.Value);
             _activeChannelValid = true;
+            _activeAudioIndex = index;
             _driftCheckTimer = DriftCheckInterval;
+            UpdateAudioSpatialization(force: true);
         }
 
         private void StopActiveChannel()
@@ -303,6 +423,7 @@ namespace DrivingRangeTheater
             if (!_activeChannelValid) return;
             _activeChannel.stop();
             _activeChannelValid = false;
+            _activeAudioIndex = -1;
         }
 
         public void SetVolume(float v)
@@ -311,15 +432,102 @@ namespace DrivingRangeTheater
             if (_activeChannelValid) _activeChannel.setVolume(v);
         }
 
-        private void Update()
+        public void RefreshDisplayComposition()
+        {
+            if (_slots == null || _activeSlot < 0 || _activeSlot >= _slots.Length) return;
+
+            var player = _slots[_activeSlot].Player;
+            if (_screenRenderTexture != null && player != null && (player.isPlaying || player.isPrepared))
+                CompositeToScreen(_slots[_activeSlot].RenderTexture);
+        }
+
+        public void ShowNoVideos()
+        {
+            StopActiveChannel();
+            ShowStatus("No video files added");
+        }
+
+        private void CreateStatusText()
+        {
+            if (_statusText != null || _screenRenderer == null) return;
+
+            var go = new GameObject("SBG-TheaterStatus");
+            go.transform.SetParent(transform, false);
+            _statusText = go.AddComponent<TextMeshPro>();
+            _statusText.text = string.Empty;
+            _statusText.fontSize = 8f;
+            _statusText.alignment = TextAlignmentOptions.Center;
+            _statusText.color = Color.white;
+            _statusText.textWrappingMode = TextWrappingModes.Normal;
+            _statusText.outlineWidth = 0.2f;
+            _statusText.rectTransform.sizeDelta = new Vector2(12f, 4f);
+            _statusText.gameObject.SetActive(false);
+            UpdateStatusTransform();
+        }
+
+        private void UpdateStatusTransform()
+        {
+            if (_statusText == null || _screenRenderer == null) return;
+
+            var t = _statusText.transform;
+            t.position = _screenRenderer.bounds.center + _screenRenderer.transform.forward * 0.03f;
+            t.rotation = _screenRenderer.transform.rotation * Quaternion.Euler(0f, 180f, 0f);
+            t.localScale = Vector3.one * 0.45f;
+        }
+
+        private void ShowStatus(string text)
+        {
+            if (_statusText == null) CreateStatusText();
+            if (_statusText == null) return;
+
+            UpdateStatusTransform();
+            _statusText.text = text;
+            _statusText.gameObject.SetActive(true);
+        }
+
+        private void HideStatus()
+        {
+            if (_statusText != null)
+                _statusText.gameObject.SetActive(false);
+        }
+
+        private Vector3 GetAudioWorldPosition()
+        {
+            if (_screenRenderer != null)
+                return _screenRenderer.bounds.center;
+            return transform.position;
+        }
+
+        private void UpdateAudioSpatialization(bool force = false)
         {
             if (!_activeChannelValid) return;
+
+            Vector3 worldPos = GetAudioWorldPosition();
+            if (!force && (worldPos - _lastAudioWorldPos).sqrMagnitude < 0.0001f)
+                return;
+
+            var pos = worldPos.ToFMODVector();
+            var vel = Vector3.zero.ToFMODVector();
+            _activeChannel.set3DAttributes(ref pos, ref vel);
+            _lastAudioWorldPos = worldPos;
+        }
+
+        private void Update()
+        {
+            var player = (_slots != null && _activeSlot >= 0 && _activeSlot < _slots.Length) ? _slots[_activeSlot].Player : null;
+            if (_screenRenderTexture != null && player != null && (player.isPlaying || player.isPrepared))
+                CompositeToScreen(_slots[_activeSlot].RenderTexture);
+            if (_statusText != null && _statusText.gameObject.activeSelf)
+                UpdateStatusTransform();
+
+            if (!_activeChannelValid) return;
+
+            UpdateAudioSpatialization();
 
             _driftCheckTimer -= Time.unscaledDeltaTime;
             if (_driftCheckTimer > 0f) return;
             _driftCheckTimer = DriftCheckInterval;
 
-            var player = _slots[_activeSlot].Player;
             if (player == null || !player.isPlaying) return;
 
             _activeChannel.getPosition(out uint audioMs, FMOD.TIMEUNIT.MS);
@@ -338,6 +546,15 @@ namespace DrivingRangeTheater
         {
             if (Current == this) Current = null;
             StopActiveChannel();
+            if (_screenMaterial != null)
+            {
+                for (int i = 0; i < _screenBindings.Length; i++)
+                {
+                    _screenMaterial.SetTexture(_screenBindings[i].Name, _screenBindings[i].Texture);
+                    _screenMaterial.SetTextureScale(_screenBindings[i].Name, _screenBindings[i].Scale);
+                    _screenMaterial.SetTextureOffset(_screenBindings[i].Name, _screenBindings[i].Offset);
+                }
+            }
             if (_slots != null)
             {
                 for (int i = 0; i < _slots.Length; i++)

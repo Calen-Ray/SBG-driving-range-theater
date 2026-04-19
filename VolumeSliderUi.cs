@@ -1,158 +1,164 @@
-using HarmonyLib;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace DrivingRangeTheater
 {
-    // Minimal self-contained overlay Canvas carrying a single slider. Appears whenever the
-    // pause menu is open AND the driving range theater is active. Writes back to the BepInEx
-    // ConfigEntry so the setting persists across runs; UpdateVolume on change routes through
-    // TheaterController so playback volume responds immediately.
+    // Small pause-menu child panel carrying a single slider. We attach it under the menu's
+    // existing hierarchy so it appears exactly when the real pause UI does and uses the same
+    // scaling / input system as the rest of the menu.
     internal class VolumeSliderUi : MonoBehaviour
     {
         public static VolumeSliderUi Instance;
 
-        private Canvas _canvas;
-        private Slider _slider;
+        private Slider _volumeSlider;
+        private Slider _overscanSlider;
 
-        public static void EnsureExists()
+        public static void EnsureExists(PauseMenu pauseMenu)
         {
             if (Instance != null) return;
-            var go = new GameObject("SBG-TheaterVolumeSlider");
-            DontDestroyOnLoad(go);
+            if (pauseMenu == null || pauseMenu.menuContainer == null) return;
+
+            var go = new GameObject("SBG-TheaterVolumeSlider", typeof(RectTransform));
+            go.transform.SetParent(pauseMenu.menuContainer.transform, false);
             Instance = go.AddComponent<VolumeSliderUi>();
+        }
+
+        public static void HandlePauseShown()
+        {
+            EnsureExists(PauseMenu.Instance);
+            if (Instance == null) return;
+
+            Instance.SyncFromConfig();
+            Instance.SetVisible(TheaterController.Current != null);
+        }
+
+        public static void HandlePauseHidden()
+        {
+            Instance?.SetVisible(false);
         }
 
         private void Awake()
         {
-            _canvas = gameObject.AddComponent<Canvas>();
-            _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            _canvas.sortingOrder = 900; // below the pause menu panel so it composes cleanly
-            gameObject.AddComponent<CanvasScaler>().uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            gameObject.AddComponent<GraphicRaycaster>();
+            var rootRT = (RectTransform)transform;
+            rootRT.anchorMin = new Vector2(0.5f, 0f);
+            rootRT.anchorMax = new Vector2(0.5f, 0f);
+            rootRT.pivot = new Vector2(0.5f, 0f);
+            rootRT.anchoredPosition = new Vector2(0f, 64f);
+            rootRT.sizeDelta = new Vector2(420f, 96f);
 
-            // Background panel
-            var panel = new GameObject("Panel");
+            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image));
             panel.transform.SetParent(transform, false);
-            var panelRT = panel.AddComponent<RectTransform>();
-            panelRT.anchorMin = new Vector2(0.5f, 0f);
-            panelRT.anchorMax = new Vector2(0.5f, 0f);
-            panelRT.pivot     = new Vector2(0.5f, 0f);
-            panelRT.anchoredPosition = new Vector2(0f, 80f);
-            panelRT.sizeDelta = new Vector2(420f, 48f);
-            var panelImg = panel.AddComponent<Image>();
-            panelImg.color = new Color(0f, 0f, 0f, 0.65f);
+            var panelRT = panel.GetComponent<RectTransform>();
+            panelRT.anchorMin = Vector2.zero;
+            panelRT.anchorMax = Vector2.one;
+            panelRT.offsetMin = Vector2.zero;
+            panelRT.offsetMax = Vector2.zero;
+            panel.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.65f);
 
-            // Label
-            var label = new GameObject("Label");
-            label.transform.SetParent(panel.transform, false);
-            var labelRT = label.AddComponent<RectTransform>();
-            labelRT.anchorMin = new Vector2(0f, 0f);
-            labelRT.anchorMax = new Vector2(0f, 1f);
-            labelRT.pivot     = new Vector2(0f, 0.5f);
-            labelRT.anchoredPosition = new Vector2(14f, 0f);
-            labelRT.sizeDelta = new Vector2(120f, 0f);
-            var labelText = label.AddComponent<Text>();
-            labelText.text = "Theater volume";
-            labelText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            labelText.fontSize = 16;
-            labelText.alignment = TextAnchor.MiddleLeft;
-            labelText.color = Color.white;
-
-            // Slider
-            var sliderGo = new GameObject("Slider");
-            sliderGo.transform.SetParent(panel.transform, false);
-            var sRT = sliderGo.AddComponent<RectTransform>();
-            sRT.anchorMin = new Vector2(0f, 0.5f);
-            sRT.anchorMax = new Vector2(1f, 0.5f);
-            sRT.pivot     = new Vector2(0f, 0.5f);
-            sRT.anchoredPosition = new Vector2(140f, 0f);
-            sRT.sizeDelta = new Vector2(-160f, 16f);
-            _slider = sliderGo.AddComponent<Slider>();
-            _slider.minValue = 0f;
-            _slider.maxValue = 1f;
-            _slider.value    = Plugin.VolumeConfig.Value;
-
-            // Slider background
-            var bg = new GameObject("Bg");
-            bg.transform.SetParent(sliderGo.transform, false);
-            var bgRT = bg.AddComponent<RectTransform>();
-            bgRT.anchorMin = new Vector2(0f, 0.25f);
-            bgRT.anchorMax = new Vector2(1f, 0.75f);
-            bgRT.sizeDelta = Vector2.zero;
-            var bgImg = bg.AddComponent<Image>();
-            bgImg.color = new Color(1f, 1f, 1f, 0.2f);
-
-            // Fill area + fill
-            var fillArea = new GameObject("Fill Area");
-            fillArea.transform.SetParent(sliderGo.transform, false);
-            var fillAreaRT = fillArea.AddComponent<RectTransform>();
-            fillAreaRT.anchorMin = new Vector2(0f, 0.25f);
-            fillAreaRT.anchorMax = new Vector2(1f, 0.75f);
-            fillAreaRT.sizeDelta = new Vector2(-20f, 0f);
-            fillAreaRT.anchoredPosition = new Vector2(-5f, 0f);
-
-            var fill = new GameObject("Fill");
-            fill.transform.SetParent(fillArea.transform, false);
-            var fillRT = fill.AddComponent<RectTransform>();
-            fillRT.sizeDelta = Vector2.zero;
-            var fillImg = fill.AddComponent<Image>();
-            fillImg.color = new Color(0.4f, 0.85f, 1f, 1f);
-
-            // Handle area + handle
-            var handleArea = new GameObject("Handle Slide Area");
-            handleArea.transform.SetParent(sliderGo.transform, false);
-            var handleAreaRT = handleArea.AddComponent<RectTransform>();
-            handleAreaRT.anchorMin = new Vector2(0f, 0f);
-            handleAreaRT.anchorMax = new Vector2(1f, 1f);
-            handleAreaRT.sizeDelta = new Vector2(-20f, 0f);
-            handleAreaRT.anchoredPosition = new Vector2(-5f, 0f);
-
-            var handle = new GameObject("Handle");
-            handle.transform.SetParent(handleArea.transform, false);
-            var handleRT = handle.AddComponent<RectTransform>();
-            handleRT.sizeDelta = new Vector2(20f, 20f);
-            var handleImg = handle.AddComponent<Image>();
-            handleImg.color = Color.white;
-
-            _slider.targetGraphic = handleImg;
-            _slider.fillRect      = fillRT;
-            _slider.handleRect    = handleRT;
-            _slider.direction     = Slider.Direction.LeftToRight;
-
-            _slider.onValueChanged.AddListener(v =>
+            _volumeSlider = CreateSliderRow(panel.transform, "Theater volume", 24f, 0f, 1f, Plugin.VolumeConfig.Value, v =>
             {
                 Plugin.VolumeConfig.Value = v;
                 TheaterController.Current?.SetVolume(v);
             });
 
+            _overscanSlider = CreateSliderRow(panel.transform, "Screen fit", -24f, 0f, 0.25f, Plugin.OverscanCompensationConfig.Value, v =>
+            {
+                Plugin.OverscanCompensationConfig.Value = v;
+                TheaterController.Current?.RefreshDisplayComposition();
+            });
+
             SetVisible(false);
+        }
+
+        private static Slider CreateSliderRow(Transform parent, string labelTextValue, float y, float min, float max, float value, UnityEngine.Events.UnityAction<float> onChanged)
+        {
+            var label = new GameObject(labelTextValue + " Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+            label.transform.SetParent(parent, false);
+            var labelRT = label.GetComponent<RectTransform>();
+            labelRT.anchorMin = new Vector2(0f, 0.5f);
+            labelRT.anchorMax = new Vector2(0f, 0.5f);
+            labelRT.pivot = new Vector2(0f, 0.5f);
+            labelRT.anchoredPosition = new Vector2(14f, y);
+            labelRT.sizeDelta = new Vector2(120f, 24f);
+            var text = label.GetComponent<TextMeshProUGUI>();
+            text.text = labelTextValue;
+            text.fontSize = 16;
+            text.alignment = TextAlignmentOptions.MidlineLeft;
+            text.color = Color.white;
+
+            var sliderGo = new GameObject(labelTextValue + " Slider", typeof(RectTransform), typeof(Slider));
+            sliderGo.transform.SetParent(parent, false);
+            var sliderRT = sliderGo.GetComponent<RectTransform>();
+            sliderRT.anchorMin = new Vector2(0f, 0.5f);
+            sliderRT.anchorMax = new Vector2(1f, 0.5f);
+            sliderRT.pivot = new Vector2(0f, 0.5f);
+            sliderRT.anchoredPosition = new Vector2(140f, y);
+            sliderRT.sizeDelta = new Vector2(-160f, 16f);
+            var slider = sliderGo.GetComponent<Slider>();
+            slider.minValue = min;
+            slider.maxValue = max;
+            slider.value = value;
+
+            var bg = new GameObject("Bg", typeof(RectTransform), typeof(Image));
+            bg.transform.SetParent(sliderGo.transform, false);
+            var bgRT = bg.GetComponent<RectTransform>();
+            bgRT.anchorMin = new Vector2(0f, 0.25f);
+            bgRT.anchorMax = new Vector2(1f, 0.75f);
+            bgRT.sizeDelta = Vector2.zero;
+            bg.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.2f);
+
+            var fillArea = new GameObject("Fill Area", typeof(RectTransform));
+            fillArea.transform.SetParent(sliderGo.transform, false);
+            var fillAreaRT = fillArea.GetComponent<RectTransform>();
+            fillAreaRT.anchorMin = new Vector2(0f, 0.25f);
+            fillAreaRT.anchorMax = new Vector2(1f, 0.75f);
+            fillAreaRT.sizeDelta = new Vector2(-20f, 0f);
+            fillAreaRT.anchoredPosition = new Vector2(-5f, 0f);
+
+            var fill = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+            fill.transform.SetParent(fillArea.transform, false);
+            var fillRT = fill.GetComponent<RectTransform>();
+            fillRT.sizeDelta = Vector2.zero;
+            fill.GetComponent<Image>().color = new Color(0.4f, 0.85f, 1f, 1f);
+
+            var handleArea = new GameObject("Handle Slide Area", typeof(RectTransform));
+            handleArea.transform.SetParent(sliderGo.transform, false);
+            var handleAreaRT = handleArea.GetComponent<RectTransform>();
+            handleAreaRT.anchorMin = new Vector2(0f, 0f);
+            handleAreaRT.anchorMax = new Vector2(1f, 1f);
+            handleAreaRT.sizeDelta = new Vector2(-20f, 0f);
+            handleAreaRT.anchoredPosition = new Vector2(-5f, 0f);
+
+            var handle = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handle.transform.SetParent(handleArea.transform, false);
+            var handleRT = handle.GetComponent<RectTransform>();
+            handleRT.sizeDelta = new Vector2(20f, 20f);
+            var handleImg = handle.GetComponent<Image>();
+            handleImg.color = Color.white;
+
+            slider.targetGraphic = handleImg;
+            slider.fillRect = fillRT;
+            slider.handleRect = handleRT;
+            slider.direction = Slider.Direction.LeftToRight;
+            slider.onValueChanged.AddListener(onChanged);
+            return slider;
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+        }
+
+        private void SyncFromConfig()
+        {
+            _volumeSlider?.SetValueWithoutNotify(Plugin.VolumeConfig.Value);
+            _overscanSlider?.SetValueWithoutNotify(Plugin.OverscanCompensationConfig.Value);
         }
 
         public void SetVisible(bool visible)
         {
-            if (_canvas != null) _canvas.enabled = visible;
-        }
-
-        // Show only when the pause menu is open AND we're in the theater's scene.
-        [HarmonyPatch(typeof(PauseMenu), "OnEnable")]
-        internal static class Patch_PauseMenu_OnEnable
-        {
-            private static void Postfix()
-            {
-                EnsureExists();
-                bool isDrivingRange = TheaterController.Current != null;
-                Instance?.SetVisible(isDrivingRange);
-            }
-        }
-
-        [HarmonyPatch(typeof(PauseMenu), "OnDisable")]
-        internal static class Patch_PauseMenu_OnDisable
-        {
-            private static void Postfix()
-            {
-                Instance?.SetVisible(false);
-            }
+            gameObject.SetActive(visible);
         }
     }
 }
