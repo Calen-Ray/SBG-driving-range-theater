@@ -45,6 +45,7 @@ namespace DrivingRangeTheater
         private ScreenTextureBinding[] _screenBindings = System.Array.Empty<ScreenTextureBinding>();
         private RenderTexture _screenRenderTexture;
         private TextMeshPro _statusText;
+        private DrivingRangeStaticCameraManager _vanillaManager;
 
         // FMOD audio — one loaded Sound per video entry, created lazily on first prepare.
         // The active Channel is replaced each cycle.
@@ -64,6 +65,7 @@ namespace DrivingRangeTheater
             Current = this;
             _screenRenderer = screenRenderer;
             _screenMaterial = screenRenderer.material;
+            _vanillaManager = vanillaMgr;
 
             // Grab the vanilla screen RT so we can composite into the exact texture the in-scene
             // display already samples. Decode itself still happens into our own 16:9 RTs.
@@ -78,6 +80,7 @@ namespace DrivingRangeTheater
                     if (cam != null && cam.targetTexture != null)
                     {
                         _screenRenderTexture = cam.targetTexture;
+                        ApplyConfiguredScreenResolution();
                         Plugin.Log?.LogInfo($"Theater RT sized from vanilla camera: {_screenRenderTexture.width}x{_screenRenderTexture.height} ({_screenRenderTexture.name})");
                     }
                 }
@@ -132,53 +135,6 @@ namespace DrivingRangeTheater
             if (_screenMaterial.HasProperty("_EmissionColor"))
                 _screenMaterial.SetColor("_EmissionColor", Color.white * 1.2f);
             _screenMaterial.EnableKeyword("_EMISSION");
-            Plugin.Log?.LogInfo($"Screen shader '{shader.name}' — {swapped.Count} texture slot(s): {string.Join(", ", swapped)}");
-
-            // Diagnostics: dump mesh UV bounds + texture-scale/offset so we can see what portion
-            // of the RT the screen actually samples. If the mesh's UVs only span a slice of the
-            // 0-1 range, the RT content outside that slice never makes it to the screen.
-            try
-            {
-                Mesh probeMesh = null;
-                string rendererKind = screenRenderer.GetType().Name;
-                var mf = screenRenderer.GetComponent<MeshFilter>();
-                if (mf != null) probeMesh = mf.sharedMesh;
-                if (probeMesh == null)
-                {
-                    var smr = screenRenderer as UnityEngine.SkinnedMeshRenderer;
-                    if (smr != null) probeMesh = smr.sharedMesh;
-                }
-                Plugin.Log?.LogInfo($"Screen renderer kind: {rendererKind}, mesh: {(probeMesh != null ? probeMesh.name : "<null>")}");
-
-                if (probeMesh != null)
-                {
-                    var uvs = probeMesh.uv;
-                    if (uvs != null && uvs.Length > 0)
-                    {
-                        float uMin = float.PositiveInfinity, uMax = float.NegativeInfinity;
-                        float vMin = float.PositiveInfinity, vMax = float.NegativeInfinity;
-                        for (int i = 0; i < uvs.Length; i++)
-                        {
-                            if (uvs[i].x < uMin) uMin = uvs[i].x;
-                            if (uvs[i].x > uMax) uMax = uvs[i].x;
-                            if (uvs[i].y < vMin) vMin = uvs[i].y;
-                            if (uvs[i].y > vMax) vMax = uvs[i].y;
-                        }
-                        Plugin.Log?.LogInfo($"Screen mesh UV range: u=[{uMin:F3}..{uMax:F3}], v=[{vMin:F3}..{vMax:F3}] (verts={uvs.Length})");
-                    }
-                    else Plugin.Log?.LogWarning("Screen mesh has no UVs.");
-                }
-
-                var b = screenRenderer.bounds;
-                Plugin.Log?.LogInfo($"Screen renderer world bounds size: {b.size.x:F2} x {b.size.y:F2} x {b.size.z:F2} (aspect x/y={b.size.x/Mathf.Max(0.0001f, b.size.y):F3})");
-                foreach (var slot in _screenTextureSlots)
-                {
-                    var scl = _screenMaterial.GetTextureScale(slot);
-                    var off = _screenMaterial.GetTextureOffset(slot);
-                    Plugin.Log?.LogInfo($"  mat scale/offset for '{slot}': scale=({scl.x:F3},{scl.y:F3}) offset=({off.x:F3},{off.y:F3})");
-                }
-            }
-            catch (System.Exception ex) { Plugin.Log?.LogWarning($"UV probe failed: {ex.Message}"); }
 
             CreateStatusText();
             _sounds = new FMOD.Sound[VideoLibrary.Entries.Count];
@@ -330,6 +286,85 @@ namespace DrivingRangeTheater
             for (int i = 0; i < _screenTextureSlots.Length; i++)
                 _screenMaterial.SetTexture(_screenTextureSlots[i], rt);
             _screenMaterial.mainTexture = rt;
+        }
+
+        private static void UpgradeVanillaRenderTextureInPlace(
+            DrivingRangeStaticCameraManager vanillaMgr,
+            RenderTexture sharedTarget,
+            int desiredSize)
+        {
+            if (sharedTarget == null || desiredSize <= 0)
+                return;
+
+            if (sharedTarget.width == desiredSize && sharedTarget.height == desiredSize)
+                return;
+
+            try
+            {
+                Plugin.Log?.LogInfo(
+                    $"Upgrading shared theater RT in place: '{sharedTarget.name}' {sharedTarget.width}x{sharedTarget.height} -> {desiredSize}x{desiredSize}");
+
+                sharedTarget.Release();
+                sharedTarget.width = desiredSize;
+                sharedTarget.height = desiredSize;
+                sharedTarget.Create();
+
+                var camerasField = HarmonyLib.Traverse.Create(vanillaMgr).Field("cameras");
+                var cams = camerasField.GetValue() as DrivingRangeStaticCamera[];
+                if (cams == null)
+                    return;
+
+                for (int i = 0; i < cams.Length; i++)
+                {
+                    var cameraController = cams[i];
+                    if (cameraController == null)
+                        continue;
+
+                    var trav = HarmonyLib.Traverse.Create(cameraController);
+                    var cam = trav.Field("thisCamera").GetValue() as Camera;
+                    if (cam == null)
+                        continue;
+
+                    // All six match-setup cameras share one display RT instance. After resizing
+                    // that RT in place, rebuild each camera's cached static/depth textures and
+                    // command buffer chain so they pick up the larger descriptor too.
+                    cam.targetTexture = sharedTarget;
+                    cam.RemoveAllCommandBuffers();
+
+                    var oldStatic = trav.Field("staticRenderTexture").GetValue() as RenderTexture;
+                    if (oldStatic != null)
+                    {
+                        oldStatic.Release();
+                        Destroy(oldStatic);
+                    }
+
+                    var oldDepth = trav.Field("staticDepthTexture").GetValue() as RenderTexture;
+                    if (oldDepth != null)
+                    {
+                        oldDepth.Release();
+                        Destroy(oldDepth);
+                    }
+
+                    trav.Field("staticRenderTexture").SetValue(null);
+                    trav.Field("staticDepthTexture").SetValue(null);
+                    trav.Field("hasTextures").SetValue(false);
+
+                    cameraController.RenderStaticTexture();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log?.LogWarning($"In-place theater RT upgrade failed: {ex.Message}");
+            }
+        }
+
+        public void ApplyConfiguredScreenResolution()
+        {
+            if (_screenRenderTexture == null || _vanillaManager == null)
+                return;
+
+            UpgradeVanillaRenderTextureInPlace(_vanillaManager, _screenRenderTexture, Plugin.GetConfiguredScreenResolution());
+            RefreshDisplayComposition();
         }
 
         private void AssignRenderTargets(int activeSlot)

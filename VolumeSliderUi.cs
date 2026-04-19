@@ -9,8 +9,12 @@ namespace DrivingRangeTheater
     // scaling / input system as the rest of the menu.
     internal class VolumeSliderUi : MonoBehaviour
     {
+        private static readonly int[] ScreenResolutionOptions = { 1024, 1536, 2048 };
+
         public static VolumeSliderUi Instance;
 
+        private Slider _resolutionSlider;
+        private TextMeshProUGUI _resolutionValueLabel;
         private Slider _volumeSlider;
         private Slider _overscanSlider;
 
@@ -45,7 +49,7 @@ namespace DrivingRangeTheater
             rootRT.anchorMax = new Vector2(0.5f, 0f);
             rootRT.pivot = new Vector2(0.5f, 0f);
             rootRT.anchoredPosition = new Vector2(0f, 64f);
-            rootRT.sizeDelta = new Vector2(420f, 96f);
+            rootRT.sizeDelta = new Vector2(420f, 144f);
 
             var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image));
             panel.transform.SetParent(transform, false);
@@ -56,13 +60,19 @@ namespace DrivingRangeTheater
             panelRT.offsetMax = Vector2.zero;
             panel.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.65f);
 
-            _volumeSlider = CreateSliderRow(panel.transform, "Theater volume", 24f, 0f, 1f, Plugin.VolumeConfig.Value, v =>
+            (_resolutionSlider, _resolutionValueLabel) = CreateDiscreteSliderRow(panel.transform, "Screen res", 48f, ScreenResolutionOptions, Plugin.GetConfiguredScreenResolution(), v =>
+            {
+                Plugin.ScreenResolutionConfig.Value = v;
+                TheaterController.Current?.ApplyConfiguredScreenResolution();
+            });
+
+            _volumeSlider = CreateSliderRow(panel.transform, "Theater volume", 0f, 0f, 1f, Plugin.VolumeConfig.Value, v =>
             {
                 Plugin.VolumeConfig.Value = v;
                 TheaterController.Current?.SetVolume(v);
             });
 
-            _overscanSlider = CreateSliderRow(panel.transform, "Screen fit", -24f, 0f, 0.25f, Plugin.OverscanCompensationConfig.Value, v =>
+            _overscanSlider = CreateSliderRow(panel.transform, "Screen fit", -48f, 0f, 0.25f, Plugin.OverscanCompensationConfig.Value, v =>
             {
                 Plugin.OverscanCompensationConfig.Value = v;
                 TheaterController.Current?.RefreshDisplayComposition();
@@ -145,6 +155,53 @@ namespace DrivingRangeTheater
             return slider;
         }
 
+        private static (Slider Slider, TextMeshProUGUI ValueLabel) CreateDiscreteSliderRow(
+            Transform parent,
+            string labelTextValue,
+            float y,
+            int[] options,
+            int selectedValue,
+            System.Action<int> onChanged)
+        {
+            var slider = CreateSliderRow(parent, labelTextValue, y, 0f, options.Length - 1, 0f, _ => { });
+            slider.wholeNumbers = true;
+
+            var valueLabel = new GameObject(labelTextValue + " Value", typeof(RectTransform), typeof(TextMeshProUGUI));
+            valueLabel.transform.SetParent(parent, false);
+            var valueRT = valueLabel.GetComponent<RectTransform>();
+            valueRT.anchorMin = new Vector2(1f, 0.5f);
+            valueRT.anchorMax = new Vector2(1f, 0.5f);
+            valueRT.pivot = new Vector2(1f, 0.5f);
+            valueRT.anchoredPosition = new Vector2(-12f, y);
+            valueRT.sizeDelta = new Vector2(60f, 24f);
+            var valueText = valueLabel.GetComponent<TextMeshProUGUI>();
+            valueText.fontSize = 16;
+            valueText.alignment = TextAlignmentOptions.MidlineRight;
+            valueText.color = Color.white;
+
+            int selectedIndex = 0;
+            for (int i = 0; i < options.Length; i++)
+            {
+                if (options[i] == selectedValue)
+                {
+                    selectedIndex = i;
+                    break;
+                }
+            }
+
+            slider.SetValueWithoutNotify(selectedIndex);
+            valueText.text = options[selectedIndex].ToString();
+            slider.onValueChanged.RemoveAllListeners();
+            slider.onValueChanged.AddListener(v =>
+            {
+                int index = Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1);
+                slider.SetValueWithoutNotify(index);
+                valueText.text = options[index].ToString();
+                onChanged(options[index]);
+            });
+            return (slider, valueText);
+        }
+
         private void OnDestroy()
         {
             if (Instance == this) Instance = null;
@@ -152,6 +209,22 @@ namespace DrivingRangeTheater
 
         private void SyncFromConfig()
         {
+            if (_resolutionSlider != null)
+            {
+                int configured = Plugin.GetConfiguredScreenResolution();
+                int index = 0;
+                for (int i = 0; i < ScreenResolutionOptions.Length; i++)
+                {
+                    if (ScreenResolutionOptions[i] == configured)
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+                _resolutionSlider.SetValueWithoutNotify(index);
+                if (_resolutionValueLabel != null)
+                    _resolutionValueLabel.text = ScreenResolutionOptions[index].ToString();
+            }
             _volumeSlider?.SetValueWithoutNotify(Plugin.VolumeConfig.Value);
             _overscanSlider?.SetValueWithoutNotify(Plugin.OverscanCompensationConfig.Value);
         }

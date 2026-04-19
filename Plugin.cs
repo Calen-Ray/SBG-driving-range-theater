@@ -18,6 +18,7 @@ namespace DrivingRangeTheater
         internal static ManualLogSource Log;
         internal static ConfigEntry<float> VolumeConfig;
         internal static ConfigEntry<float> OverscanCompensationConfig;
+        internal static ConfigEntry<int> ScreenResolutionConfig;
 
         // Simple rate limit: one cycle per 200 ms. Vanilla uses cycleButtonCooldown (~0.3 s) —
         // we match the spirit without needing to mirror the exact value.
@@ -31,12 +32,18 @@ namespace DrivingRangeTheater
                 new ConfigDescription(
                     "Client-local master volume for the driving-range theater (0.0 - 1.0).",
                     new AcceptableValueRange<float>(0f, 1f)));
+            ScreenResolutionConfig = Config.Bind("Theater", "ScreenResolution", 1024,
+                new ConfigDescription(
+                    "Client-local theater screen RT resolution. Accepted values: 1024, 1536, 2048.",
+                    new AcceptableValueList<int>(1024, 1536, 2048)));
             OverscanCompensationConfig = Config.Bind("Theater", "OverscanCompensation", 0.00f,
                 new ConfigDescription(
                     "Shrinks the displayed video inside the theater screen RT to compensate for screen overscan/cropping (0.0 - 0.25).",
                     new AcceptableValueRange<float>(0f, 0.25f)));
             VolumeConfig.SettingChanged += (_, __) =>
                 TheaterController.Current?.SetVolume(VolumeConfig.Value);
+            ScreenResolutionConfig.SettingChanged += (_, __) =>
+                TheaterController.Current?.ApplyConfiguredScreenResolution();
             OverscanCompensationConfig.SettingChanged += (_, __) =>
                 TheaterController.Current?.RefreshDisplayComposition();
             PauseMenu.Paused += VolumeSliderUi.HandlePauseShown;
@@ -52,6 +59,12 @@ namespace DrivingRangeTheater
             NetworkClient.OnConnectedEvent += RegisterClientHandlers;
 
             Log.LogInfo($"{ModName} v{ModVersion} loaded ({VideoLibrary.Videos.Count} video(s)).");
+        }
+
+        internal static int GetConfiguredScreenResolution()
+        {
+            int value = ScreenResolutionConfig != null ? ScreenResolutionConfig.Value : 1024;
+            return value == 1536 || value == 2048 ? value : 1024;
         }
 
         private static void RegisterClientHandlers()

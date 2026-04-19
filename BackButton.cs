@@ -34,7 +34,7 @@ namespace DrivingRangeTheater
     // ApplyCurrentCameraIndex calls don't re-clone.
     internal static class BackButtonInstaller
     {
-        private const float OffsetMeters = -0.6508f; // original offset plus ~2 inches further left
+        private const float OffsetMeters = 0.2508f; // original offset plus ~2 inches further left
         private static bool _installed;
 
         public static void ResetForNewScene() => _installed = false;

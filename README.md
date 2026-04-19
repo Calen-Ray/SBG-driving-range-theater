@@ -22,7 +22,8 @@ cycle state is server-authoritative and replicated via Mirror.
 
 - Original button: next video.
 - Cloned button beside it: previous video.
-- Pause menu while on the driving range: client-local volume slider.
+- Pause menu while on the driving range: client-local `Screen res`, `Theater volume`, and
+  `Screen fit` controls.
 - If the screen trims the edges of a clip, adjust `OverscanCompensation` in
   `BepInEx/config/cray.drivingrangetheater.cfg`.
 
@@ -92,6 +93,10 @@ The framework scans your `Videos/` folder on next startup. No code is needed.
   suppresses vanilla camera activation and drives the theater manually. Active video decodes into
   an offscreen RT, then gets composited into the vanilla driving-range screen RT with a configurable
   overscan-safe margin so the existing in-scene display path keeps working.
+- Screen resolution: the mod upgrades the original shared
+  `match_setup_camera_render_texture` in place and rebuilds the six vanilla driving-range camera
+  caches against the chosen size. Supported client-local options are `1024`, `1536`, and `2048`.
+  This keeps the hidden screen binding intact while improving final display sharpness.
 - Forward button: the vanilla `nextCameraButton` remains wired to
   `CmdCycleNextCameraForAllClients`. The SyncVar `currentCameraIndex` still drives playback; the
   mod just reinterprets the index against the video list instead of the camera list.
@@ -99,7 +104,8 @@ The framework scans your `Videos/` folder on next startup. No code is needed.
   swaps its `DrivingRangeNextCameraButton` component for `DrivingRangeBackCameraButton`, which
   sends `TheaterCycleMsg { direction = -1 }`. A server handler updates the SyncVar accordingly.
 - Volume slider: a small pause-menu child panel shown while the pause menu is open and the theater
-  is active. The slider writes to a BepInEx `ConfigEntry<float>` so the value persists.
+  is active. The sliders write to BepInEx `ConfigEntry<float>` values so volume and screen-fit
+  changes persist.
 - Audio playback: FMOD sidecar audio starts when the active clip actually begins video playback,
   then stays synced against the `VideoPlayer` clock with periodic drift correction.
 
