@@ -1,5 +1,11 @@
 # DrivingRangeTheater
 
+Does your lobby host step away for a bathroom break between games? Do you and your friends often wait for someone to finish something AFK between furious 18-hole battles? This is the mod for you. Add a mod to r2-modman with a /videos folder and it's content will be displayed in beautiful big picture cinema to enjoy as a group while you wait for whoever to finish making dinner, using the bathroom, or having appendicitis (looking at you Baustin).
+
+Don't know how to make a mod? drop a video file over at http://calenray.com/SBG-driving-range-theater-mod-maker/ and it will automatically turn the video file into a compatible mod to view from your very own golf drive-in. Be aware that it's not a quick process to re-encode video files and assemble mod-packages entirely client side (in browser). I am a busy fella so I may or may not get around to efficiency improvements, feel free to open a pull request for the site as it's open source to allow other developers to add improvements! (github for contributors: https://github.com/Calen-Ray/SBG-driving-range-theater-mod-maker)
+
+Speaking of being a busy fella, here is chat gpt rewriting my three paragraph explaination of the mod framework into something more organized. Cheers. 
+
 Turns the driving-range leaderboard TV into a video player. Hit the cycle buttons (forward / back)
 to flip between clips; each client controls their own playback volume from the pause menu.
 
