@@ -35,8 +35,14 @@ cycle state is server-authoritative and replicated via Mirror.
 
 ## Adding videos
 
-Drop video files into the `Videos/` folder of any plugin package. The framework scans
-`<r2modman profile>/BepInEx/plugins/*/Videos/` at startup and sorts the files alphabetically.
+Drop video files into **any** of the following locations under a plugin package — the framework
+scans all of them at startup and sorts across all matches alphabetically, deduping by path:
+
+- `<plugin>/Videos/` — canonical.
+- `<plugin>/Video/` — also accepted (singular).
+- `<plugin>/` (plugin root) — **only if** a same-basename audio sidecar
+  (`.ogg`/`.wav`/`.mp3`/`.m4a`/…) sits next to it. The sidecar requirement keeps the scanner
+  from picking up unrelated mp4s a plugin ships for other reasons.
 
 ### Video
 
@@ -134,6 +140,31 @@ pwsh tools/package.ps1
 ```
 
 Produces `artifacts/Cray-DrivingRangeTheater-<version>.zip` ready to upload.
+
+## Releasing
+
+Automated via [`.github/workflows/release.yml`](.github/workflows/release.yml) — publishing a
+GitHub Release uploads the attached zip to Thunderstore.
+
+**One-time setup.** Add a `THUNDERSTORE_TOKEN` repository secret (Settings -> Secrets and
+variables -> Actions). The token comes from
+[thunderstore.io/settings/teams/](https://thunderstore.io/settings/teams/) under the `Cray` team.
+
+**Cut a release:**
+
+```bash
+# 1. Bump version_number in manifest.json and add a CHANGELOG.md entry.
+# 2. Commit + tag + push.
+git commit -am "Release v0.2.0"
+git tag v0.2.0
+git push --follow-tags
+
+# 3. Build the zip locally (CI can't build — hosted runners don't have the game DLLs).
+pwsh tools/package.ps1
+
+# 4. Create the GitHub Release with the zip attached; the workflow publishes on release.published.
+gh release create v0.2.0 artifacts/Cray-*-*.zip --notes-file CHANGELOG.md
+```
 
 ## License
 

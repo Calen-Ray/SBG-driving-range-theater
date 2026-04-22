@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1
+- Scan both `Videos/` and `Video/` subfolders under each plugin package.
+- Also accept videos placed directly in a plugin's root folder, provided each has a
+  same-basename audio sidecar (`.ogg`/`.wav`/`.mp3`/`.m4a`/`.aac`/`.flac`). The sidecar
+  requirement keeps the scanner from picking up unrelated mp4s shipped by other plugins.
+- Dedupe by path so a mod with both a `Videos/` dir and root-level sidecared videos doesn't
+  produce duplicate playlist entries.
+
 ## v0.1.0
 - Initial release.
 - Replaces the driving-range leaderboard TV with a video player.
