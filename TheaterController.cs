@@ -57,7 +57,7 @@ namespace DrivingRangeTheater
         private const int DriftToleranceMs = 250;
         private Vector3 _lastAudioWorldPos;
         private const float AudioMinDistance = 6f;
-        private const float AudioMaxDistance = 32f;
+        private const float AudioMaxDistance = 45f;
         private int _activeAudioIndex = -1;
 
         public void Initialize(Renderer screenRenderer, DrivingRangeStaticCameraManager vanillaMgr)

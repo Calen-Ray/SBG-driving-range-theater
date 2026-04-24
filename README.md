@@ -76,6 +76,8 @@ ffmpeg -y -i input.mp4 -vn -c:a libvorbis -q:a 4 input.ogg
 ```
 
 Audio is played as a **3D FMOD sound** positioned at the theater screen, not as a global 2D mix.
+Volume ramps linearly from full at **6 m** to silent at **45 m** — you can stand well away from
+the screen and still hear the clip, but it fades out before polluting the rest of the range.
 Sync is maintained by a 2-second drift check against `VideoPlayer.time`; the framework corrects
 mismatches greater than 250 ms with `channel.setPosition()`.
 
