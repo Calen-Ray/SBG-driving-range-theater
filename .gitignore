@@ -25,3 +25,8 @@ Thumbs.db
 
 # Misc
 *.log
+
+# Internal notes for Claude / coding agents — not part of the repo
+CLAUDE.md
+TODO.md
+AGENTS.md
